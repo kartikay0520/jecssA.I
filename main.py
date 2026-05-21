@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext, messagebox, simpledialog
+from tkinter import scrolledtext, messagebox, font as tkfont
 import threading
 import speech_recognition as sr
 import win32com.client
@@ -11,152 +11,141 @@ import json
 import os
 import subprocess
 import platform
+import math
+import time
 
-#  GROQ API CONFIGURATION 
-GROQ_API_KEY = "My_API_Key"  # Get from https://console.groq.com
+# ─── GROQ API CONFIGURATION ───────────────────────────────────────────────────
+# Get your API key at: https://console.groq.com/keys
+GROQ_API_KEY = "My_API_Key"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.3-70b-versatile"
 
-# Voice Engine
+# Latest model (Llama 4 Maverick) — 128K context, MoE architecture, best quality
+MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
+# Fallback: "llama-3.3-70b-versatile"  ← production-stable, slightly faster
+
+# ─── VOICE ENGINE ─────────────────────────────────────────────────────────────
 speaker = win32com.client.Dispatch("SAPI.SpVoice")
-
-# Settings
-VOICE_SPEED = 1  # -10 to 10 (0 is default)
-VOICE_VOLUME = 100  # 0 to 100
-speaker.Rate = VOICE_SPEED
+VOICE_SPEED  = 1
+VOICE_VOLUME = 100
+speaker.Rate   = VOICE_SPEED
 speaker.Volume = VOICE_VOLUME
 
-# Conversation history
+# ─── STATE ────────────────────────────────────────────────────────────────────
 conversation_history = []
-notes_list = []
+notes_list           = []
+chat_history_log     = []   # list of (role, text) for in-app chat log
 
-#  AI INTEGRATION 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DESIGN TOKENS
+# ══════════════════════════════════════════════════════════════════════════════
+BG_DEEP    = "#0D0F14"
+BG_PANEL   = "#13161E"
+BG_CARD    = "#1A1E2A"
+BG_HOVER   = "#1F2535"
+
+ACCENT_A   = "#00C8FF"   # cyan  – primary
+ACCENT_B   = "#7B61FF"   # violet
+ACCENT_C   = "#00FF8C"   # mint green (success / active)
+ACCENT_RED = "#FF4D6A"   # danger
+
+TEXT_HI    = "#E8EAF0"
+TEXT_MID   = "#8A90A2"
+TEXT_DIM   = "#4A5066"
+
+BORDER     = "#252B3D"
+BORDER_ACT = "#2E3550"
+
+FONT_HEAD  = ("Segoe UI", 9, "bold")
+FONT_BODY  = ("Segoe UI", 9)
+FONT_MONO  = ("Consolas", 9)
+FONT_BIG   = ("Segoe UI", 22, "bold")
+FONT_LABEL = ("Segoe UI", 8)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  AI & FEATURE FUNCTIONS  (unchanged logic, same as original)
+# ══════════════════════════════════════════════════════════════════════════════
+
 def get_ai_response(user_message):
-    """Get response from GROQ AI"""
     try:
         conversation_history.append({"role": "user", "content": user_message})
-        
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": MODEL,
-            "messages": conversation_history,
-            "temperature": 0.7,
-            "max_tokens": 500
-        }
-        
-        response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=25)
-        response.raise_for_status()
-        
-        result = response.json()
-        ai_message = result["choices"][0]["message"]["content"]
-        
-        conversation_history.append({"role": "assistant", "content": ai_message})
-        
-        # Keep last 10 messages
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        payload = {"model": MODEL, "messages": conversation_history,
+                   "temperature": 0.7, "max_tokens": 500}
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=25)
+        resp.raise_for_status()
+        msg = resp.json()["choices"][0]["message"]["content"]
+        conversation_history.append({"role": "assistant", "content": msg})
         if len(conversation_history) > 10:
             conversation_history[:] = conversation_history[-10:]
-        
-        return {"success": True, "response": ai_message}
-        
+        return {"success": True, "response": msg}
     except Exception as e:
         return {"success": False, "response": f"AI Error: {str(e)}"}
 
-#  FEATURE FUNCTIONS 
-
 def get_weather(city="Delhi"):
-    """Get weather information (OpenWeatherMap API - free)"""
     try:
-        # Using free weather API (no key needed for basic)
         url = f"https://wttr.in/{city}?format=%C+%t"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.text.strip()
-        return "Weather service unavailable"
+        r = requests.get(url, timeout=5)
+        return r.text.strip() if r.status_code == 200 else "Weather unavailable"
     except:
         return "Could not fetch weather"
 
-
 def run_file():
-    file_path = "C:/Users/lenovo/OneDrive/Desktop/pdf_merger/main.py"  # your file path
-
-    subprocess.run(["python", file_path])
+    subprocess.run(["python", "C:/Users/lenovo/OneDrive/Desktop/pdf_merger/main.py"])
 
 def search_wikipedia(query):
-    """Search Wikipedia"""
     try:
         url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query}"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get('extract', 'No information found')[:300] + "..."
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            return r.json().get("extract", "No information found")[:300] + "..."
         return "Wikipedia search failed"
     except:
         return "Wikipedia unavailable"
 
 def calculate(expression):
-    """Safe calculator"""
     try:
-        # Remove dangerous functions
         expression = expression.replace("^", "**")
-        allowed_chars = set("0123456789+-*/(). ")
-        if not all(c in allowed_chars for c in expression):
+        allowed = set("0123456789+-*/(). ")
+        if not all(c in allowed for c in expression):
             return "Invalid expression"
-        result = eval(expression, {"__builtins__": {}}, {})
-        return str(result)
+        return str(eval(expression, {"__builtins__": {}}, {}))
     except:
         return "Calculation error"
 
 def open_application(app_name):
-    """Open common applications"""
-    apps = {
-        "notepad": "notepad.exe",
-        "calculator": "calc.exe",
-        "paint": "mspaint.exe",
-        "chrome": "chrome.exe",
-        "edge": "msedge.exe",
-        "explorer": "explorer.exe",
-        "word": "winword.exe",
-        "excel": "excel.exe"
-    }
-    
+    apps = {"notepad": "notepad.exe", "calculator": "calc.exe",
+            "paint": "mspaint.exe", "chrome": "chrome.exe",
+            "edge": "msedge.exe", "explorer": "explorer.exe",
+            "word": "winword.exe", "excel": "excel.exe"}
     try:
-        app_name = app_name.lower()
+        name = app_name.lower()
         for key, exe in apps.items():
-            if key in app_name:
+            if key in name:
                 subprocess.Popen(exe)
                 return f"Opening {key.title()}"
-        return f"Application '{app_name}' not found"
+        return f"App '{app_name}' not found"
     except:
         return f"Could not open {app_name}"
 
 def add_note(note_text):
-    """Add a note"""
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    notes_list.append(f"[{timestamp}] {note_text}")
-    return f"Note added: {note_text}"
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    notes_list.append(f"[{ts}] {note_text}")
+    return f"Note saved: {note_text}"
 
 def get_notes():
-    """Get all notes"""
-    if not notes_list:
-        return "No notes saved"
-    return "\n".join(notes_list)
+    return "\n".join(notes_list) if notes_list else "No notes yet"
 
 def get_system_info():
-    """Get system information"""
     try:
-        info = f"OS: {platform.system()} {platform.release()}\n"
-        info += f"Machine: {platform.machine()}\n"
-        info += f"Processor: {platform.processor()}"
-        return info
+        return (f"OS: {platform.system()} {platform.release()}\n"
+                f"Machine: {platform.machine()}\n"
+                f"Processor: {platform.processor()}")
     except:
         return "Could not get system info"
 
 def tell_joke():
-    """Random joke"""
     jokes = [
         "Why don't scientists trust atoms? Because they make up everything!",
         "Why did the scarecrow win an award? He was outstanding in his field!",
@@ -167,530 +156,577 @@ def tell_joke():
     return random.choice(jokes)
 
 def set_reminder(message, seconds=60):
-    """Set a simple reminder"""
     def remind():
-        import time
         time.sleep(seconds)
         speaker.Speak(f"Reminder: {message}")
-        show_output_window(f"⏰ Reminder:\n{message}")
-    
+        append_chat("JEKS", f"⏰ Reminder: {message}", tag="ai")
     threading.Thread(target=remind, daemon=True).start()
     return f"Reminder set for {seconds} seconds"
 
-# ============= GUI FUNCTIONS =============
 
-def show_output_window(message):
-    """Enhanced popup window"""
-    output_win = tk.Toplevel(app)
-    output_win.title("JEKS Output")
-    output_win.configure(bg="#1a1a1a")
-    output_win.geometry("500x300")
+# ══════════════════════════════════════════════════════════════════════════════
+#  GUI HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
 
-    # Scrolled text for long content
-    text_area = scrolledtext.ScrolledText(
-        output_win,
-        wrap=tk.WORD,
-        font=("Consolas", 11),
-        bg="#2d2d2d",
-        fg="white",
-        padx=15,
-        pady=15
-    )
-    text_area.pack(expand=True, fill="both", padx=10, pady=10)
-    text_area.insert(tk.END, message)
-    text_area.config(state=tk.DISABLED)
+def append_chat(role, text, tag="user"):
+    """Append a message to the chat log widget."""
+    ts = datetime.datetime.now().strftime("%H:%M")
+    chat_log.config(state=tk.NORMAL)
+    if tag == "user":
+        chat_log.insert(tk.END, f"\n  You  {ts}\n", "usr_name")
+        chat_log.insert(tk.END, f"  {text}\n", "usr_msg")
+    else:
+        chat_log.insert(tk.END, f"\n  JEKS  {ts}\n", "bot_name")
+        chat_log.insert(tk.END, f"  {text}\n", "bot_msg")
+    chat_log.config(state=tk.DISABLED)
+    chat_log.see(tk.END)
 
-    ok_btn = tk.Button(
-        output_win,
-        text="OK",
-        command=output_win.destroy,
-        bg="#2962FF",
-        fg="white",
-        font=("Arial", 11, "bold"),
-        width=15
-    )
-    ok_btn.pack(pady=10)
-    
-    output_win.transient(app)
-    output_win.grab_set()
-    output_win.focus_force()
 
-def show_chat_window(user_input, ai_response):
-    """Show AI conversation"""
-    chat_win = tk.Toplevel(app)
-    chat_win.title("AI Conversation")
-    chat_win.configure(bg="#1a1a1a")
-    chat_win.geometry("650x450")
+def set_status(text, color=TEXT_MID):
+    status_var.set(text)
+    status_label.config(fg=color)
+    root.update_idletasks()
 
-    chat_display = scrolledtext.ScrolledText(
-        chat_win,
-        wrap=tk.WORD,
-        font=("Consolas", 10),
-        bg="#2d2d2d",
-        fg="white",
-        padx=15,
-        pady=15
-    )
-    chat_display.pack(expand=True, fill="both", padx=10, pady=10)
-    
-    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-    
-    chat_display.insert(tk.END, f"[{timestamp}] ", "time")
-    chat_display.insert(tk.END, "You:\n", "user")
-    chat_display.insert(tk.END, f"{user_input}\n\n", "user_text")
-    
-    chat_display.insert(tk.END, f"[{timestamp}] ", "time")
-    chat_display.insert(tk.END, "JEKS AI:\n", "ai")
-    chat_display.insert(tk.END, ai_response, "ai_text")
-    
-    chat_display.tag_config("time", foreground="#888888", font=("Consolas", 8))
-    chat_display.tag_config("user", foreground="#00FF9D", font=("Consolas", 10, "bold"))
-    chat_display.tag_config("user_text", foreground="#E0E0E0")
-    chat_display.tag_config("ai", foreground="#2962FF", font=("Consolas", 10, "bold"))
-    chat_display.tag_config("ai_text", foreground="#FFFFFF")
-    
-    chat_display.config(state=tk.DISABLED)
-    
-    tk.Button(
-        chat_win,
-        text="Close",
-        command=chat_win.destroy,
-        bg="#2962FF",
-        fg="white",
-        font=("Arial", 10, "bold"),
-        width=15
-    ).pack(pady=10)
-    
-    chat_win.transient(app)
-    chat_win.grab_set()
 
-#  MAIN COMMAND PROCESSOR 
+def set_indicator(state):
+    """state: 'idle' | 'listen' | 'think' | 'speak' | 'error'"""
+    colors = {
+        "idle":   (TEXT_DIM, "—"),
+        "listen": (ACCENT_C, "●  Listening"),
+        "think":  (ACCENT_A, "◎  Processing"),
+        "speak":  (ACCENT_B, "▶  Speaking"),
+        "error":  (ACCENT_RED, "✕  Error"),
+    }
+    c, lbl = colors.get(state, colors["idle"])
+    indicator_dot.config(bg=c)
+    indicator_label.config(text=lbl, fg=c)
+    root.update_idletasks()
 
-def listen_and_respond(status_label):
-    """Process voice commands"""
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ANIMATED WAVEFORM CANVAS
+# ══════════════════════════════════════════════════════════════════════════════
+
+wave_active   = False
+wave_frame_id = None
+
+def _draw_wave(canvas, w, h, tick, amplitudes):
+    canvas.delete("wave")
+    bars   = 28
+    gap    = 3
+    bar_w  = (w - gap * (bars + 1)) / bars
+    cx     = w / 2
+    for i in range(bars):
+        phase   = tick * 0.18 + i * 0.45
+        amp     = amplitudes[i % len(amplitudes)]
+        height  = amp * abs(math.sin(phase)) * (h * 0.55) + 4
+        x1 = gap + i * (bar_w + gap)
+        x2 = x1 + bar_w
+        cy = h / 2
+        # gradient-ish: centre bars brighter
+        dist = abs(i - bars / 2) / (bars / 2)
+        alpha_factor = 1 - dist * 0.5
+        color = ACCENT_C if wave_active else TEXT_DIM
+        canvas.create_rectangle(
+            x1, cy - height / 2, x2, cy + height / 2,
+            fill=color, outline="", tags="wave"
+        )
+
+def start_wave_anim(canvas, w, h):
+    global wave_active, wave_frame_id
+    wave_active = True
+    amps = [random.uniform(0.3, 1.0) for _ in range(14)]
+    tick = [0]
+
+    def step():
+        if not wave_active:
+            canvas.delete("wave")
+            _draw_wave(canvas, w, h, 0, [0.05] * 14)
+            return
+        tick[0] += 1
+        _draw_wave(canvas, w, h, tick[0], amps)
+        canvas.after(55, step)
+
+    step()
+
+def stop_wave_anim(canvas, w, h):
+    global wave_active
+    wave_active = False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  COMMAND PROCESSOR
+# ══════════════════════════════════════════════════════════════════════════════
+
+def listen_and_respond():
     recognizer = sr.Recognizer()
-    
     try:
         with sr.Microphone() as source:
-            status_label.config(text="🎧 Adjusting for noise...", fg="#FFD700")
-            app.update()
+            set_indicator("listen")
+            set_status("Adjusting for ambient noise…")
             recognizer.adjust_for_ambient_noise(source, duration=0.5)
-            
-            status_label.config(text="🎤 Listening...", fg="#00FF9D")
-            app.update()
-            
-            audio_data = recognizer.listen(source, timeout=10, phrase_time_limit=20)
-            
-            status_label.config(text="🔄 Recognizing...", fg="#2962FF")
-            app.update()
-            
-            text = recognizer.recognize_google(audio_data)
-            output_msg = f"You said: {text}\n\n"
-            print(f"[USER] {text}")
-            
-            text_lower = text.lower()
-            
-            # COMMAND PROCESSING 
-            
-            # Greeting
-            if any(word in text_lower for word in ["greet", "hello", "hi", "hey"]):
-                hour = int(datetime.datetime.now().hour)
-                if hour < 12:
-                    out = "Good morning!"
-                elif hour < 16:
-                    out = "Good afternoon!"
-                else:
-                    out = "Good evening!"
-                speaker.Speak(out)
-                output_msg += out
-                status_label.config(text="✅ Greeted!", fg="#00FF9D")
-            
-            # Introduction
-            elif "intro" in text_lower or "introduce yourself" in text_lower:
-                out = "Hi, I'm JEKS, your AI-powered virtual assistant. I can help you with tasks, answer questions, and much more!"
-                speaker.Speak(out)
-                output_msg += out
-                status_label.config(text="✅ Introduced", fg="#00FF9D")
-            
-            # Exit
-            elif any(phrase in text_lower for phrase in ["close it", "exit", "goodbye", "bye"]):
-                out = "Goodbye! Have a great day!"
-                speaker.Speak(out)
-                status_label.config(text="👋 Closing...", fg="#FF6B6B")
-                output_msg += out
-                show_output_window(output_msg)
-                app.after(800, app.destroy)
-                return
-            
-            # Time
-            elif "time" in text_lower:
-                now = datetime.datetime.now()
-                time_str = now.strftime("%I:%M %p")
-                out = f"Current time is {time_str}"
-                speaker.Speak(out)
-                output_msg += out
-                status_label.config(text="🕐 Time told", fg="#00FF9D")
-            
-            # Date
-            elif "date" in text_lower or "today" in text_lower:
-                now = datetime.datetime.now()
-                date_str = now.strftime("%B %d, %Y")
-                out = f"Today is {date_str}"
-                speaker.Speak(out)
-                output_msg += out
-                status_label.config(text="📅 Date told", fg="#00FF9D")
-            
-            # Weather
-            elif "weather" in text_lower:
-                city = "Delhi"  # Default city
-                if "in" in text_lower:
-                    words = text_lower.split("in")
-                    if len(words) > 1:
-                        city = words[1].strip()
-                weather_info = get_weather(city)
-                out = f"Weather in {city}: {weather_info}"
-                speaker.Speak(out)
-                output_msg += out
-                status_label.config(text="🌤️ Weather fetched", fg="#00FF9D")
-            
-            # Wikipedia
-            elif "wikipedia" in text_lower or "wiki" in text_lower:
-                query = text_lower.replace("wikipedia", "").replace("wiki", "").replace("search", "").strip()
-                if query:
-                    status_label.config(text="📚 Searching Wikipedia...", fg="#FFD700")
-                    app.update()
-                    wiki_info = search_wikipedia(query)
-                    speaker.Speak("Here's what I found on Wikipedia")
-                    output_msg += f"Wikipedia: {query}\n\n{wiki_info}"
-                    status_label.config(text="✅ Wikipedia search done", fg="#00FF9D")
-                else:
-                    out = "Please specify what to search on Wikipedia"
-                    speaker.Speak(out)
-                    output_msg += out
-            
-            # Calculator
-            elif "calculate" in text_lower or "compute" in text_lower:
-                expression = text_lower.replace("calculate", "").replace("compute", "").replace("what is", "").strip()
-                if expression:
-                    result = calculate(expression)
-                    out = f"Result: {result}"
-                    speaker.Speak(out)
-                    output_msg += out
-                    status_label.config(text="🔢 Calculated", fg="#00FF9D")
-                else:
-                    out = "Please provide an expression to calculate"
-                    speaker.Speak(out)
-                    output_msg += out
-            
-            # Google Search
-            elif "search google" in text_lower or "google search" in text_lower:
-                query = text_lower.replace("search google for", "").replace("google search", "").strip()
-                if query:
-                    search_url = f"https://www.google.com/search?q={query}"
-                    webbrowser.open(search_url)
-                    out = f"Searching Google for {query}"
-                    speaker.Speak(out)
-                    output_msg += out
-                    status_label.config(text="🔍 Google opened", fg="#00FF9D")
-                else:
-                    out = "What should I search for?"
-                    speaker.Speak(out)
-                    output_msg += out
-            
-            # PDF Merger
-            elif "merge pdf" in text_lower or "merge files" in text_lower:
-                out = "Opening PDF Merger application"
-                speaker.Speak(out)
-                output_msg += out
-                status_label.config(text="📂 Opening PDF Merger", fg="#00FF9D")
-                run_file()
-            
-            # YouTube
-            elif "youtube" in text_lower or "play video" in text_lower:
-                query = text_lower.replace("youtube", "").replace("play video", "").replace("search", "").strip()
-                if query:
-                    yt_url = f"https://www.youtube.com/results?search_query={query}"
-                    webbrowser.open(yt_url)
-                    out = f"Searching YouTube for {query}"
-                    speaker.Speak(out)
-                    output_msg += out
-                    status_label.config(text="📺 YouTube opened", fg="#00FF9D")
-                else:
-                    webbrowser.open("https://www.youtube.com")
-                    out = "Opening YouTube"
-                    speaker.Speak(out)
-                    output_msg += out
-            
-            # Open Application
-            elif "open" in text_lower and any(app in text_lower for app in ["notepad", "calculator", "paint", "chrome", "edge", "explorer", "word", "excel"]):
-                app_name = text_lower.replace("open", "").strip()
-                result = open_application(app_name)
-                speaker.Speak(result)
-                output_msg += result
-                status_label.config(text="📱 App opened", fg="#00FF9D")
-            
-            # Take Note
-            elif "note" in text_lower or "remember" in text_lower:
-                note_text = text_lower.replace("take note", "").replace("remember", "").replace("note that", "").strip()
-                if note_text:
-                    result = add_note(note_text)
-                    speaker.Speak("Note saved")
-                    output_msg += result
-                    status_label.config(text="📝 Note saved", fg="#00FF9D")
-                else:
-                    out = "What should I note?"
-                    speaker.Speak(out)
-                    output_msg += out
-            
-            # Show Notes
-            elif "show notes" in text_lower or "my notes" in text_lower:
-                notes = get_notes()
-                speaker.Speak("Here are your notes")
-                output_msg += f"Your Notes:\n\n{notes}"
-                status_label.config(text="📋 Notes displayed", fg="#00FF9D")
-            
-            # Random Number
-            elif "pick a number" in text_lower or "random number" in text_lower:
-                rn = random.randint(1, 100)
-                out = f"Random number: {rn}"
-                speaker.Speak(str(rn))
-                output_msg += out
-                status_label.config(text=f"🎲 Number: {rn}", fg="#00FF9D")
-            
-            # Joke
-            elif "joke" in text_lower or "make me laugh" in text_lower:
-                joke = tell_joke()
-                speaker.Speak(joke)
-                output_msg += joke
-                status_label.config(text="😄 Joke told", fg="#00FF9D")
-            
-            # System Info
-            elif "system info" in text_lower or "computer info" in text_lower:
-                info = get_system_info()
-                speaker.Speak("Here is your system information")
-                output_msg += info
-                status_label.config(text="💻 System info", fg="#00FF9D")
-            
-            # Clear History
-            elif "clear history" in text_lower:
-                conversation_history.clear()
-                speaker.Speak("Conversation history cleared")
-                output_msg += "History cleared!"
-                status_label.config(text="🗑️ History cleared", fg="#00FF9D")
-            
-            # AI Chat (if GROQ API key is set)
-            elif GROQ_API_KEY != "YOUR_GROQ_API_KEY_HERE":
-                status_label.config(text="🤖 AI thinking...", fg="#2962FF")
-                app.update()
-                
-                result = get_ai_response(text)
-                
-                if result["success"]:
-                    speech_text = result["response"][:250]
-                    speaker.Speak(speech_text)
-                    status_label.config(text="✅ AI responded", fg="#00FF9D")
-                    show_chat_window(text, result["response"])
-                    return  # Exit early to show chat window
-                else:
-                    speaker.Speak("AI service unavailable")
-                    output_msg += result["response"]
-            
-            # Default: Repeat
+            set_status("Listening — speak now")
+            start_wave_anim(wave_canvas, WAVE_W, WAVE_H)
+            audio = recognizer.listen(source, timeout=10, phrase_time_limit=20)
+            stop_wave_anim(wave_canvas, WAVE_W, WAVE_H)
+
+            set_indicator("think")
+            set_status("Recognising speech…")
+            text = recognizer.recognize_google(audio)
+
+        append_chat("You", text, tag="user")
+        text_lower = text.lower()
+        out = ""
+
+        # ── Greet
+        if any(w in text_lower for w in ["greet", "hello", "hi", "hey"]):
+            h = int(datetime.datetime.now().hour)
+            out = "Good morning!" if h < 12 else ("Good afternoon!" if h < 16 else "Good evening!")
+
+        # ── Introduce
+        elif "intro" in text_lower or "introduce yourself" in text_lower:
+            out = "Hi, I'm JEKS — your AI-powered voice assistant. I can answer questions, search the web, manage notes, and much more!"
+
+        # ── Exit
+        elif any(p in text_lower for p in ["close it", "exit", "goodbye", "bye"]):
+            out = "Goodbye! Have a great day!"
+            set_indicator("speak")
+            speaker.Speak(out)
+            append_chat("JEKS", out, tag="ai")
+            set_status("Closing…", ACCENT_RED)
+            root.after(900, root.destroy)
+            return
+
+        # ── Time
+        elif "time" in text_lower:
+            out = f"Current time is {datetime.datetime.now().strftime('%I:%M %p')}"
+
+        # ── Date
+        elif "date" in text_lower or "today" in text_lower:
+            out = f"Today is {datetime.datetime.now().strftime('%B %d, %Y')}"
+
+        # ── Weather
+        elif "weather" in text_lower:
+            city = "Delhi"
+            if "in" in text_lower:
+                parts = text_lower.split("in")
+                if len(parts) > 1:
+                    city = parts[1].strip()
+            info = get_weather(city)
+            out  = f"Weather in {city}: {info}"
+
+        # ── Wikipedia
+        elif "wikipedia" in text_lower or "wiki" in text_lower:
+            q = text_lower.replace("wikipedia","").replace("wiki","").replace("search","").strip()
+            if q:
+                set_status("Searching Wikipedia…")
+                out = f"Wikipedia › {q}\n\n{search_wikipedia(q)}"
             else:
-                speaker.Speak(text)
-                output_msg += f"I heard: {text}"
-                status_label.config(text="🔊 Repeated", fg="#00FF9D")
-            
-            show_output_window(output_msg)
-            
+                out = "Please specify what to search on Wikipedia"
+
+        # ── Calculate
+        elif "calculate" in text_lower or "compute" in text_lower:
+            expr = text_lower.replace("calculate","").replace("compute","").replace("what is","").strip()
+            out  = f"Result: {calculate(expr)}" if expr else "Please provide an expression"
+
+        # ── Google
+        elif "search google" in text_lower or "google search" in text_lower:
+            q = text_lower.replace("search google for","").replace("google search","").strip()
+            if q:
+                webbrowser.open(f"https://www.google.com/search?q={q}")
+                out = f"Searching Google for {q}"
+            else:
+                out = "What should I search for?"
+
+        # ── PDF Merger
+        elif "merge pdf" in text_lower or "merge files" in text_lower:
+            out = "Opening PDF Merger…"
+            run_file()
+
+        # ── YouTube
+        elif "youtube" in text_lower or "play video" in text_lower:
+            q = text_lower.replace("youtube","").replace("play video","").replace("search","").strip()
+            if q:
+                webbrowser.open(f"https://www.youtube.com/results?search_query={q}")
+                out = f"Searching YouTube for {q}"
+            else:
+                webbrowser.open("https://www.youtube.com")
+                out = "Opening YouTube"
+
+        # ── Open App
+        elif "open" in text_lower and any(a in text_lower for a in ["notepad","calculator","paint","chrome","edge","explorer","word","excel"]):
+            out = open_application(text_lower.replace("open","").strip())
+
+        # ── Take Note
+        elif "note" in text_lower or "remember" in text_lower:
+            body = text_lower.replace("take note","").replace("remember","").replace("note that","").strip()
+            out  = add_note(body) if body else "What should I note?"
+
+        # ── Show Notes
+        elif "show notes" in text_lower or "my notes" in text_lower:
+            out = f"Your Notes\n\n{get_notes()}"
+
+        # ── Random Number
+        elif "pick a number" in text_lower or "random number" in text_lower:
+            n   = random.randint(1, 100)
+            out = f"Random number: {n}"
+
+        # ── Joke
+        elif "joke" in text_lower or "make me laugh" in text_lower:
+            out = tell_joke()
+
+        # ── System Info
+        elif "system info" in text_lower or "computer info" in text_lower:
+            out = get_system_info()
+
+        # ── Clear History
+        elif "clear history" in text_lower:
+            conversation_history.clear()
+            out = "Conversation history cleared."
+
+        # ── AI Chat (GROQ)
+        elif GROQ_API_KEY != "YOUR_GROQ_API_KEY_HERE":
+            set_status("Thinking…")
+            result = get_ai_response(text)
+            if result["success"]:
+                out = result["response"]
+            else:
+                out = result["response"]
+
+        # ── Default
+        else:
+            speaker.Speak(text)
+            out = f"I heard: {text}"
+
+        set_indicator("speak")
+        speaker.Speak(out[:300])
+        append_chat("JEKS", out, tag="ai")
+        set_status("Ready", TEXT_MID)
+        set_indicator("idle")
+
     except sr.WaitTimeoutError:
-        err = "⏱️ No speech detected"
-        status_label.config(text=err, fg="#FF6B6B")
+        stop_wave_anim(wave_canvas, WAVE_W, WAVE_H)
+        set_indicator("error")
+        set_status("No speech detected — try again", ACCENT_RED)
         speaker.Speak("I didn't hear anything")
-        
     except sr.UnknownValueError:
-        err = "❓ Could not understand"
-        status_label.config(text=err, fg="#FF6B6B")
+        stop_wave_anim(wave_canvas, WAVE_W, WAVE_H)
+        set_indicator("error")
+        set_status("Couldn't understand — please repeat", ACCENT_RED)
         speaker.Speak("Sorry, I couldn't understand that")
-        
     except sr.RequestError as e:
-        err = "🔴 Speech service error"
-        status_label.config(text=err, fg="#FF6B6B")
+        stop_wave_anim(wave_canvas, WAVE_W, WAVE_H)
+        set_indicator("error")
+        set_status("Speech service error", ACCENT_RED)
         speaker.Speak("Speech recognition error")
-        print(f"Error: {e}")
-        
     except Exception as e:
-        status_label.config(text="❌ Error occurred", fg="#FF6B6B")
+        stop_wave_anim(wave_canvas, WAVE_W, WAVE_H)
+        set_indicator("error")
+        set_status(f"Error: {e}", ACCENT_RED)
         speaker.Speak("An error occurred")
-        print(f"Error: {e}")
+    finally:
+        mic_btn.config(state=tk.NORMAL)
 
-def start_listening():
-    """Start listening in separate thread"""
-    threading.Thread(target=listen_and_respond, args=(status_label,), daemon=True).start()
 
-def show_commands():
-    """Show all available commands"""
-    commands = """
-🎤 AVAILABLE VOICE COMMANDS
+def on_listen_click():
+    mic_btn.config(state=tk.DISABLED)
+    set_indicator("listen")
+    threading.Thread(target=listen_and_respond, daemon=True).start()
 
-━━━━━ BASIC ━━━━━
-• greet / hello / hi
-• introduce yourself
-• time
-• date / today
-• goodbye / exit
 
-━━━━━ SEARCH & INFO ━━━━━
-• search google for [query]
-• youtube [query]
-• wikipedia [topic]
-• weather in [city]
+# ── Text input send ───────────────────────────────────────────────────────────
+def on_text_send(event=None):
+    text = text_input.get().strip()
+    if not text:
+        return
+    text_input.delete(0, tk.END)
+    append_chat("You", text, tag="user")
 
-━━━━━ CALCULATOR ━━━━━
-• calculate [expression]
-• compute [expression]
+    def handle():
+        set_indicator("think")
+        set_status("Thinking…")
+        if GROQ_API_KEY != "YOUR_GROQ_API_KEY_HERE":
+            result = get_ai_response(text)
+            out = result["response"]
+        else:
+            out = "GROQ API key not configured."
+        set_indicator("speak")
+        speaker.Speak(out[:300])
+        append_chat("JEKS", out, tag="ai")
+        set_status("Ready", TEXT_MID)
+        set_indicator("idle")
 
-━━━━━ APPLICATIONS ━━━━━
-• open notepad
-• open calculator
-• open paint
-• open chrome
+    threading.Thread(target=handle, daemon=True).start()
 
-━━━━━ NOTES & MEMORY ━━━━━
-• take note [text]
-• show notes / my notes
-• clear history
 
-━━━━━ FUN ━━━━━
-• tell me a joke
-• pick a number
-• random number
+# ══════════════════════════════════════════════════════════════════════════════
+#  COMMAND PANEL (slide-in frame)
+# ══════════════════════════════════════════════════════════════════════════════
+cmd_panel_visible = False
 
-━━━━━ SYSTEM ━━━━━
-• system info
-• computer info
+COMMANDS = [
+    ("Basic",           ["hello / hi", "introduce yourself", "time", "date", "goodbye"]),
+    ("Search & Web",    ["search google for …", "youtube …", "wikipedia …", "weather in …"]),
+    ("Math",            ["calculate …", "compute …"]),
+    ("Apps",            ["open notepad", "open calculator", "open chrome", "open paint"]),
+    ("Notes",           ["take note …", "show notes", "clear history"]),
+    ("Fun",             ["tell me a joke", "random number"]),
+    ("System",          ["system info"]),
+    ("AI Chat",         ["ask anything naturally!"]),
+]
 
-━━━━━ AI CHAT ━━━━━
-• Ask anything naturally!
-• AI will understand context
-    """
-    
-    messagebox.showinfo("Voice Commands", commands)
+def toggle_cmd_panel():
+    global cmd_panel_visible
+    if cmd_panel_visible:
+        cmd_panel.place_forget()
+        cmd_panel_visible = False
+    else:
+        cmd_panel.place(x=0, y=0, relwidth=1, relheight=1)
+        cmd_panel_visible = True
 
-def show_settings():
-    """Show settings window"""
-    settings_win = tk.Toplevel(app)
-    settings_win.title("Settings")
-    settings_win.geometry("400x300")
-    settings_win.configure(bg="#1a1a1a")
-    
-    tk.Label(settings_win, text="⚙️ Settings", bg="#1a1a1a", fg="white", 
-             font=("Arial", 16, "bold")).pack(pady=20)
-    
-    # Voice speed
-    tk.Label(settings_win, text="Voice Speed:", bg="#1a1a1a", fg="white",
-             font=("Arial", 11)).pack(pady=5)
-    
-    def update_speed(val):
-        global VOICE_SPEED
-        VOICE_SPEED = int(float(val))
-        speaker.Rate = VOICE_SPEED
-    
-    speed_scale = tk.Scale(settings_win, from_=-10, to=10, orient=tk.HORIZONTAL,
-                          command=update_speed, bg="#2d2d2d", fg="white",
-                          highlightthickness=0, length=250)
-    speed_scale.set(VOICE_SPEED)
-    speed_scale.pack(pady=10)
-    
-    # Voice volume
-    tk.Label(settings_win, text="Voice Volume:", bg="#1a1a1a", fg="white",
-             font=("Arial", 11)).pack(pady=5)
-    
-    def update_volume(val):
-        global VOICE_VOLUME
-        VOICE_VOLUME = int(float(val))
-        speaker.Volume = VOICE_VOLUME
-    
-    volume_scale = tk.Scale(settings_win, from_=0, to=100, orient=tk.HORIZONTAL,
-                           command=update_volume, bg="#2d2d2d", fg="white",
-                           highlightthickness=0, length=250)
-    volume_scale.set(VOICE_VOLUME)
-    volume_scale.pack(pady=10)
-    
-    tk.Button(settings_win, text="Close", command=settings_win.destroy,
-              bg="#2962FF", fg="white", font=("Arial", 10, "bold"),
-              width=15).pack(pady=20)
 
-# GUI DESIGN 
-app = tk.Tk()
-app.title("JEKS - AI Voice Assistant")
-app.geometry("600x550")
-app.configure(bg="#1a1a1a")
+# ══════════════════════════════════════════════════════════════════════════════
+#  SETTINGS WINDOW
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Header
-header_frame = tk.Frame(app, bg="#2962FF", height=100)
-header_frame.pack(fill="x")
+def open_settings():
+    win = tk.Toplevel(root)
+    win.title("Settings")
+    win.geometry("380x300")
+    win.configure(bg=BG_PANEL)
+    win.resizable(False, False)
 
-title_label = tk.Label(header_frame, text="🤖 JEKS", bg="#2962FF", fg="white",
-                       font=("Arial", 28, "bold"))
-title_label.pack(pady=8)
+    def section(parent, title):
+        tk.Label(parent, text=title, bg=BG_PANEL, fg=TEXT_MID,
+                 font=FONT_LABEL).pack(anchor="w", padx=20, pady=(16, 2))
 
-subtitle_label = tk.Label(header_frame, text="AI-Powered Voice Assistant",
-                         bg="#2962FF", fg="#E0E0E0", font=("Arial", 11))
-subtitle_label.pack()
+    def lbl(parent, text, **kw):
+        return tk.Label(parent, text=text, bg=BG_PANEL, fg=TEXT_HI,
+                        font=FONT_BODY, **kw)
 
-# Status
-status_label = tk.Label(app, text="Press START to activate voice control...",
-                       bg="#1a1a1a", fg="white", font=("Arial", 13),
-                       wraplength=550, pady=20)
-status_label.pack()
+    tk.Label(win, text="Settings", bg=BG_PANEL, fg=TEXT_HI,
+             font=("Segoe UI", 13, "bold")).pack(anchor="w", padx=20, pady=(20, 4))
 
-# Main buttons
-main_frame = tk.Frame(app, bg="#1a1a1a")
-main_frame.pack(pady=25)
+    sep(win).pack(fill="x", padx=20, pady=4)
 
-start_button = tk.Button(main_frame, text="🎤 START\nLISTENING",
-                        bg="#00FF9D", fg="#1a1a1a",
-                        font=("Arial", 14, "bold"), width=15, height=3,
-                        command=start_listening, cursor="hand2")
-start_button.grid(row=0, column=0, padx=10)
+    section(win, "VOICE SPEED")
+    speed_var = tk.IntVar(value=VOICE_SPEED)
+    spd = tk.Scale(win, from_=-10, to=10, orient=tk.HORIZONTAL, variable=speed_var,
+                   bg=BG_PANEL, fg=TEXT_HI, troughcolor=BG_CARD, highlightthickness=0,
+                   activebackground=ACCENT_A, length=320,
+                   command=lambda v: setattr(speaker, "Rate", int(float(v))))
+    spd.pack(padx=20)
 
-commands_button = tk.Button(main_frame, text="📋 COMMANDS\nLIST",
-                           bg="#FFD700", fg="#1a1a1a",
-                           font=("Arial", 14, "bold"), width=15, height=3,
-                           command=show_commands, cursor="hand2")
-commands_button.grid(row=0, column=1, padx=10)
+    section(win, "VOICE VOLUME")
+    vol_var = tk.IntVar(value=VOICE_VOLUME)
+    vol = tk.Scale(win, from_=0, to=100, orient=tk.HORIZONTAL, variable=vol_var,
+                   bg=BG_PANEL, fg=TEXT_HI, troughcolor=BG_CARD, highlightthickness=0,
+                   activebackground=ACCENT_A, length=320,
+                   command=lambda v: setattr(speaker, "Volume", int(float(v))))
+    vol.pack(padx=20)
 
-# Secondary buttons
-sec_frame = tk.Frame(app, bg="#1a1a1a")
-sec_frame.pack(pady=15)
+    flat_btn(win, "Close", win.destroy, ACCENT_B).pack(pady=16)
 
-settings_btn = tk.Button(sec_frame, text="⚙️ Settings", bg="#2962FF", fg="white",
-                        font=("Arial", 10, "bold"), width=12,
-                        command=show_settings, cursor="hand2")
-settings_btn.grid(row=0, column=0, padx=5)
 
-close_button = tk.Button(sec_frame, text="❌ Close", bg="#FF6B6B", fg="white",
-                        font=("Arial", 10, "bold"), width=12,
-                        command=app.destroy, cursor="hand2")
-close_button.grid(row=0, column=1, padx=5)
+# ══════════════════════════════════════════════════════════════════════════════
+#  REUSABLE WIDGET FACTORIES
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Info panel
-info_frame = tk.Frame(app, bg="#2d2d2d", relief=tk.GROOVE, borderwidth=2)
-info_frame.pack(pady=20, padx=30, fill="x")
+def sep(parent):
+    return tk.Frame(parent, bg=BORDER, height=1)
 
-info_label = tk.Label(info_frame,
-                     text="💡 Features: Voice Control • AI Chat • Weather • Wikipedia\n"
-                          "Calculator • Notes • Apps • Jokes • And More!",
-                     bg="#2d2d2d", fg="#E0E0E0", font=("Arial", 9),
-                     justify="center", pady=15)
-info_label.pack()
+def flat_btn(parent, text, cmd, accent=ACCENT_A, w=None):
+    kw = {}
+    if w:
+        kw["width"] = w
+    b = tk.Button(
+        parent, text=text, command=cmd,
+        bg=BG_CARD, fg=accent, activebackground=BG_HOVER,
+        activeforeground=accent, relief=tk.FLAT, cursor="hand2",
+        font=FONT_HEAD, bd=0, padx=14, pady=7,
+        highlightthickness=1, highlightbackground=BORDER,
+        **kw
+    )
+    return b
 
-# Footer
-footer = tk.Label(app, text="🔊 Speak naturally • JEKS understands context",
-                 bg="#1a1a1a", fg="#888888", font=("Arial", 9, "italic"))
-footer.pack(pady=10)
+def icon_btn(parent, text, cmd, accent=ACCENT_A, size=40):
+    b = tk.Button(
+        parent, text=text, command=cmd,
+        bg=BG_CARD, fg=accent, activebackground=BG_HOVER,
+        activeforeground=accent, relief=tk.FLAT, cursor="hand2",
+        font=("Segoe UI", 11, "bold"), bd=0,
+        width=4, height=2,
+        highlightthickness=1, highlightbackground=BORDER,
+    )
+    return b
 
-start_button.focus_set()
 
-app.mainloop()
+# ══════════════════════════════════════════════════════════════════════════════
+#  BUILD MAIN WINDOW
+# ══════════════════════════════════════════════════════════════════════════════
+root = tk.Tk()
+root.title("JEKS — AI Voice Assistant")
+root.geometry("680x760")
+root.minsize(580, 680)
+root.configure(bg=BG_DEEP)
+
+# ── Title bar ─────────────────────────────────────────────────────────────────
+title_bar = tk.Frame(root, bg=BG_PANEL, height=64)
+title_bar.pack(fill="x")
+title_bar.pack_propagate(False)
+
+tk.Label(title_bar, text="JEKS", bg=BG_PANEL, fg=ACCENT_A,
+         font=("Segoe UI", 20, "bold")).place(x=22, y=12)
+
+tk.Label(title_bar, text="AI Voice Assistant", bg=BG_PANEL, fg=TEXT_MID,
+         font=FONT_BODY).place(x=22, y=40)
+
+# header right buttons
+hdr_right = tk.Frame(title_bar, bg=BG_PANEL)
+hdr_right.place(relx=1.0, x=-16, y=12, anchor="ne")
+
+flat_btn(hdr_right, "Commands", toggle_cmd_panel, ACCENT_B).pack(side=tk.LEFT, padx=4)
+flat_btn(hdr_right, "Settings", open_settings,   TEXT_MID).pack(side=tk.LEFT, padx=4)
+flat_btn(hdr_right, "✕ Quit",   root.destroy,     ACCENT_RED).pack(side=tk.LEFT, padx=(4,0))
+
+sep(root).pack(fill="x")
+
+# ── Indicator row ─────────────────────────────────────────────────────────────
+ind_row = tk.Frame(root, bg=BG_DEEP, pady=10)
+ind_row.pack(fill="x", padx=22)
+
+indicator_dot = tk.Label(ind_row, text=" ", bg=TEXT_DIM, width=2, relief=tk.FLAT)
+indicator_dot.pack(side=tk.LEFT, padx=(0, 8))
+
+indicator_label = tk.Label(ind_row, text="—", bg=BG_DEEP, fg=TEXT_DIM, font=FONT_BODY)
+indicator_label.pack(side=tk.LEFT)
+
+# ── Waveform canvas ───────────────────────────────────────────────────────────
+WAVE_W, WAVE_H = 636, 70
+wave_canvas = tk.Canvas(root, width=WAVE_W, height=WAVE_H,
+                         bg=BG_PANEL, highlightthickness=0)
+wave_canvas.pack(padx=22, pady=(4, 0))
+# draw idle bars
+_draw_wave(wave_canvas, WAVE_W, WAVE_H, 0, [0.15] * 14)
+
+# ── MIC button ────────────────────────────────────────────────────────────────
+mic_row = tk.Frame(root, bg=BG_DEEP)
+mic_row.pack(fill="x", padx=22, pady=10)
+
+mic_btn = tk.Button(
+    mic_row, text="⏺  START LISTENING",
+    command=on_listen_click,
+    bg=ACCENT_C, fg="#0A120E",
+    activebackground="#00D97A", activeforeground="#0A120E",
+    font=("Segoe UI", 11, "bold"),
+    relief=tk.FLAT, cursor="hand2", bd=0,
+    padx=20, pady=10,
+    highlightthickness=0
+)
+mic_btn.pack(side=tk.LEFT, fill="x", expand=True)
+
+# ── Status bar ────────────────────────────────────────────────────────────────
+status_var   = tk.StringVar(value="Press  START LISTENING  or type below")
+status_label = tk.Label(root, textvariable=status_var, bg=BG_DEEP, fg=TEXT_MID,
+                        font=FONT_BODY, anchor="w")
+status_label.pack(fill="x", padx=24, pady=(0, 8))
+
+sep(root).pack(fill="x", padx=0)
+
+# ── Chat log ──────────────────────────────────────────────────────────────────
+chat_frame = tk.Frame(root, bg=BG_DEEP)
+chat_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+chat_log = tk.Text(
+    chat_frame,
+    bg=BG_DEEP, fg=TEXT_HI,
+    font=FONT_MONO,
+    relief=tk.FLAT, bd=0,
+    padx=20, pady=14,
+    wrap=tk.WORD,
+    state=tk.DISABLED,
+    cursor="arrow",
+    insertbackground=ACCENT_A,
+    selectbackground=ACCENT_B,
+    selectforeground=TEXT_HI,
+    spacing3=4,
+)
+sb = tk.Scrollbar(chat_frame, command=chat_log.yview, bg=BG_PANEL, troughcolor=BG_PANEL,
+                  relief=tk.FLAT, bd=0, width=8)
+chat_log.configure(yscrollcommand=sb.set)
+sb.pack(side=tk.RIGHT, fill="y")
+chat_log.pack(side=tk.LEFT, fill="both", expand=True)
+
+chat_log.tag_config("usr_name", foreground=ACCENT_C,  font=("Segoe UI", 8, "bold"))
+chat_log.tag_config("usr_msg",  foreground=TEXT_HI,   font=FONT_MONO, lmargin1=12, lmargin2=12)
+chat_log.tag_config("bot_name", foreground=ACCENT_A,  font=("Segoe UI", 8, "bold"))
+chat_log.tag_config("bot_msg",  foreground="#B0C8E8", font=FONT_MONO, lmargin1=12, lmargin2=12)
+
+# opening message
+root.after(300, lambda: append_chat("JEKS",
+    "Hello! I'm JEKS. Say a command or type below. Try: 'tell me a joke', 'weather in Mumbai', or just ask me anything.", tag="ai"))
+
+sep(root).pack(fill="x")
+
+# ── Text input row ────────────────────────────────────────────────────────────
+inp_row = tk.Frame(root, bg=BG_PANEL, pady=10)
+inp_row.pack(fill="x", padx=0)
+
+text_input = tk.Entry(
+    inp_row,
+    bg=BG_CARD, fg=TEXT_HI,
+    insertbackground=ACCENT_A,
+    font=FONT_BODY,
+    relief=tk.FLAT, bd=0,
+    highlightthickness=1, highlightbackground=BORDER,
+    highlightcolor=ACCENT_A,
+)
+text_input.pack(side=tk.LEFT, fill="x", expand=True, padx=(16, 8), ipady=8)
+text_input.bind("<Return>", on_text_send)
+
+send_btn = tk.Button(
+    inp_row, text="Send ↑",
+    command=on_text_send,
+    bg=ACCENT_A, fg=BG_DEEP,
+    activebackground="#00A8D8", activeforeground=BG_DEEP,
+    font=FONT_HEAD, relief=tk.FLAT, cursor="hand2",
+    bd=0, padx=14, pady=8, highlightthickness=0
+)
+send_btn.pack(side=tk.LEFT, padx=(0, 16))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  COMMANDS OVERLAY PANEL
+# ══════════════════════════════════════════════════════════════════════════════
+cmd_panel = tk.Frame(root, bg=BG_PANEL)
+
+# close button
+tk.Button(cmd_panel, text="✕  Close", command=toggle_cmd_panel,
+          bg=BG_PANEL, fg=TEXT_MID, activebackground=BG_HOVER,
+          activeforeground=ACCENT_RED, relief=tk.FLAT, cursor="hand2",
+          font=FONT_HEAD, bd=0, padx=14, pady=8).place(relx=1.0, x=-16, y=12, anchor="ne")
+
+tk.Label(cmd_panel, text="Voice Commands", bg=BG_PANEL, fg=TEXT_HI,
+         font=("Segoe UI", 14, "bold")).place(x=22, y=16)
+
+cmd_scroll_frame = tk.Frame(cmd_panel, bg=BG_PANEL)
+cmd_scroll_frame.place(x=0, y=54, relwidth=1, rely=0, height=999)  # overflow ok
+
+y_off = 0
+for section_title, items in COMMANDS:
+    tk.Label(cmd_scroll_frame, text=section_title.upper(), bg=BG_PANEL, fg=ACCENT_A,
+             font=("Segoe UI", 8, "bold")).place(x=22, y=y_off + 8)
+    y_off += 26
+    for item in items:
+        tk.Label(cmd_scroll_frame, text=f"  › {item}", bg=BG_PANEL, fg=TEXT_HI,
+                 font=FONT_MONO, anchor="w").place(x=22, y=y_off)
+        y_off += 22
+    tk.Frame(cmd_scroll_frame, bg=BORDER, height=1).place(x=22, y=y_off + 4, relwidth=1, width=-44)
+    y_off += 18
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LAUNCH
+# ══════════════════════════════════════════════════════════════════════════════
+text_input.focus_set()
+root.mainloop()
